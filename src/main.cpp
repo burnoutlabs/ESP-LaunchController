@@ -1,13 +1,7 @@
 /**
- * @file completeExample.cpp
+ * @file main.cpp
  * @author Ian Gray @iangray1000
  *
- * This is an example GUI to show off all of the features of ESPUI.
- * This can be built using the Arduino IDE, or PlatformIO.
- *
- * ---------------------------------------------------------------------------------------
- * If you just want to see examples of the ESPUI code, jump down to the setUpUI() function
- * ---------------------------------------------------------------------------------------
  *
  * When this program boots, it will load an SSID and password from the EEPROM.
  * The SSID is a null-terminated C string stored at EEPROM addresses 0-31
@@ -15,9 +9,6 @@
  * If these credentials do not work for some reason, the ESP will create an Access
  * Point wifi with the SSID HOSTNAME (defined below). You can then connect and use
  * the controls on the "Wifi Credentials" tab to store credentials into the EEPROM.
- *
- * Version with lambdas. Comparing to version with only callbacks:
- * diff -u ../completeExample/completeExample.cpp completeLambda.ino|less
  *
  */
 
@@ -64,6 +55,11 @@ uint16_t mainLabel, mainSwitcher, mainSlider, mainText, mainNumber, mainScramble
 uint16_t styleButton, styleLabel, styleSwitcher, styleSlider, styleButton2, styleLabel2, styleSlider2;
 uint16_t graph;
 volatile bool updates = false;
+
+#include "rlht.h"
+
+unsigned long currentSliceMillis = 0;
+unsigned long lastSliceMillis = 0;
 
 // This is the main function which builds our GUI
 void setUpUI()
@@ -182,15 +178,44 @@ void setUpUI()
 			;
 		if (SLOW_BOOT)
 			delay(5000); // Delay booting to give time to connect a serial monitor
+
+		Wire.begin();
+
+		// -------------------------ESPUI------------------------- //
 		connectWifi();
 #if defined(ESP32)
 		WiFi.setSleep(false); // For the ESP32: turn off sleeping to increase UI responsivness (at the cost of power use)
 #endif
 		setUpUI();
+		// -------------------------------------------------------- //
+
+
 	}
 
 	void loop()
 	{
+		// -------------------------RLHT-------------------------- //
+		currentSliceMillis = millis();
+		if (currentSliceMillis - lastSliceMillis > SLICE_DATA_INTERVAL_MS)
+		{
+			lastSliceMillis = currentSliceMillis;
+			// Heating data
+			for (int i = 0; i < NUM_RLHT_SLICES; i++)
+			{
+				float temp;
+				if (relay_heaters[i][1] == 1)
+					RLHTRequestThermo(relay_heaters[i][0], &(relay_heater_val[i]), &(relay_heater_val[i + 1]));
+			}
+			Serial.print("Heater 1: ");
+			Serial.println(relay_heater_val[0]);
+			Serial.print("Heater 2: ");
+			Serial.println(relay_heater_val[1]);
+		}
+		handleSerialCommand();
+
+		// -------------------------------------------------------- //
+
+		// -------------------------ESPUI-------------------------- //
 		static long unsigned lastTime = 0;
 
 		// Send periodic updates if switcher is turned on
@@ -238,6 +263,7 @@ void setUpUI()
 		MDNS.update();
 #endif
 	}
+	// -------------------------------------------------------- //
 
 	// Utilities
 	//
