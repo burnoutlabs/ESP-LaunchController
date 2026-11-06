@@ -45,6 +45,7 @@
 #define SLOW_BOOT 0
 #define HOSTNAME "ESP-LaunchController"
 #define FORCE_USE_HOTSPOT 0
+#define SERIAL_WAIT_MS 2000 // Longest time setup() waits for a serial monitor
 
 // EEPROM layout for the stored Wi-Fi credentials. Each field holds a
 // null-terminated string, so it fits at most (size - 1) characters.
@@ -174,8 +175,10 @@ void setUpUI()
 	{
 		randomSeed(0);
 		Serial.begin(115200);
-		while (!Serial)
-			;
+		// Give a serial monitor a moment to attach, but carry on without one.
+		unsigned long serialWaitStart = millis();
+		while (!Serial && millis() - serialWaitStart < SERIAL_WAIT_MS)
+			delay(10);
 		if (SLOW_BOOT)
 			delay(5000); // Delay booting to give time to connect a serial monitor
 
