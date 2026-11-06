@@ -46,6 +46,14 @@
 #define HOSTNAME "ESP-LaunchController"
 #define FORCE_USE_HOTSPOT 0
 
+// EEPROM layout for the stored Wi-Fi credentials. Each field holds a
+// null-terminated string, so it fits at most (size - 1) characters.
+#define EEPROM_SSID_ADDR 0
+#define EEPROM_SSID_SIZE 32
+#define EEPROM_PASS_ADDR (EEPROM_SSID_ADDR + EEPROM_SSID_SIZE)
+#define EEPROM_PASS_SIZE 64
+#define EEPROM_SIZE (EEPROM_PASS_ADDR + EEPROM_PASS_SIZE)
+
 // Function Prototypes
 void connectWifi();
 void setUpUI();
@@ -53,6 +61,7 @@ void textCallback(Control *sender, int type);
 void generalCallback(Control *sender, int type);
 void randomString(char *buf, int len);
 void paramCallback(Control *sender, int type, int param);
+void writeStringToEEPROM(const String &str, int baseaddress, int size);
 
 // UI handles
 uint16_t wifi_ssid_text, wifi_pass_text;
@@ -107,9 +116,9 @@ void setUpUI()
 		auto wifitab = ESPUI.addControl(Tab, "", "WiFi Credentials");
 		wifi_ssid_text = ESPUI.addControl(Text, "SSID", "", Alizarin, wifitab, textCallback);
 		// Note that adding a "Max" control to a text control sets the max length
-		ESPUI.addControl(Max, "", "32", None, wifi_ssid_text);
+		ESPUI.addControl(Max, "", "31", None, wifi_ssid_text); // EEPROM_SSID_SIZE - 1
 		wifi_pass_text = ESPUI.addControl(Text, "Password", "", Alizarin, wifitab, textCallback);
-		ESPUI.addControl(Max, "", "64", None, wifi_pass_text);
+		ESPUI.addControl(Max, "", "63", None, wifi_pass_text); // EEPROM_PASS_SIZE - 1
 		ESPUI.addControl(Button, "Save", "Save", Peterriver, wifitab,
 						 [](Control *sender, int type)
 						 {
@@ -118,23 +127,9 @@ void setUpUI()
 								 Serial.println("Saving credentials to EPROM...");
 								 Serial.println(ESPUI.getControl(wifi_ssid_text)->value);
 								 Serial.println(ESPUI.getControl(wifi_pass_text)->value);
-								 unsigned int i;
-								 EEPROM.begin(100);
-								 for (i = 0; i < ESPUI.getControl(wifi_ssid_text)->value.length(); i++)
-								 {
-									 EEPROM.write(i, ESPUI.getControl(wifi_ssid_text)->value.charAt(i));
-									 if (i == 30)
-										 break; // Even though we provided a max length, user input should never be trusted
-								 }
-								 EEPROM.write(i, '\0');
-
-								 for (i = 0; i < ESPUI.getControl(wifi_pass_text)->value.length(); i++)
-								 {
-									 EEPROM.write(i + 32, ESPUI.getControl(wifi_pass_text)->value.charAt(i));
-									 if (i == 94)
-										 break; // Even though we provided a max length, user input should never be trusted
-								 }
-								 EEPROM.write(i + 32, '\0');
+								 EEPROM.begin(EEPROM_SIZE);
+								 writeStringToEEPROM(ESPUI.getControl(wifi_ssid_text)->value, EEPROM_SSID_ADDR, EEPROM_SSID_SIZE);
+								 writeStringToEEPROM(ESPUI.getControl(wifi_pass_text)->value, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
 								 EEPROM.end();
 							 }
 						 });
@@ -286,6 +281,18 @@ void setUpUI()
 		}
 	}
 
+	// Writes at most (size - 1) characters of str followed by a terminating
+	// null, so the write stays within [baseaddress, baseaddress + size).
+	void writeStringToEEPROM(const String &str, int baseaddress, int size)
+	{
+		int len = str.length();
+		if (len > size - 1)
+			len = size - 1;
+		for (int i = 0; i < len; i++)
+			EEPROM.write(baseaddress + i, str.charAt(i));
+		EEPROM.write(baseaddress + len, '\0');
+	}
+
 	void connectWifi()
 	{
 		int connect_timeout;
@@ -301,10 +308,10 @@ void setUpUI()
 		if (!(FORCE_USE_HOTSPOT))
 		{
 			yield();
-			EEPROM.begin(100);
+			EEPROM.begin(EEPROM_SIZE);
 			String stored_ssid, stored_pass;
-			readStringFromEEPROM(stored_ssid, 0, 32);
-			readStringFromEEPROM(stored_pass, 32, 96);
+			readStringFromEEPROM(stored_ssid, EEPROM_SSID_ADDR, EEPROM_SSID_SIZE);
+			readStringFromEEPROM(stored_pass, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
 			EEPROM.end();
 
 // Try to connect with stored credentials, fire up an access point if they don't work.
