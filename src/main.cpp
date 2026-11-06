@@ -2,6 +2,11 @@
  * @file main.cpp
  * @author Ian Gray @iangray1000
  *
+ * Based on the ESPUI example examples/completeLambda/completeLambda.ino
+ * (https://github.com/s00500/ESPUI), Copyright (c) 2017 Lukas Bachschwell
+ * (s00500), MIT licence. Modified by Cameron Brooks, 2024.
+ * See THIRD_PARTY_NOTICES.md for the full ESPUI licence notice.
+ *
  *
  * When this program boots, it will load an SSID and password from the EEPROM.
  * The SSID is a null-terminated C string stored at EEPROM addresses 0-31
