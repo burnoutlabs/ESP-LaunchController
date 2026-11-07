@@ -15,31 +15,20 @@
  * Point wifi with the SSID HOSTNAME (defined below). You can then connect and use
  * the controls on the "Wifi Credentials" tab to store credentials into the EEPROM.
  *
+ * The access point is WPA2-protected. Its password is AP_PASSWORD if that is
+ * defined at build time; otherwise the device generates a random one on first
+ * use, keeps it at EEPROM addresses 96-111, and prints it to serial whenever it
+ * starts the access point. See README.md.
+ *
  */
 
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <ESPUI.h>
 
-#if defined(ESP32)
 #include <WiFi.h>
 #include <ESPmDNS.h>
-#else
-// esp8266
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <umm_malloc/umm_heap_select.h>
-#ifndef CORE_MOCK
-#ifndef MMU_IRAM_HEAP
-#warning Try MMU option '2nd heap shared' in 'tools' IDE menu (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#option-summary)
-#warning use decorators: { HeapSelectIram doAllocationsInIRAM; ESPUI.addControl(...) ... } (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#how-to-select-heap)
-#warning then check http://<ip>/heap
-#endif // MMU_IRAM_HEAP
-#ifndef DEBUG_ESP_OOM
-#error on ESP8266 and ESPUI, you must define OOM debug option when developping
-#endif
-#endif
-#endif
+#include <esp_random.h>
 
 // Settings
 #define SLOW_BOOT 0
@@ -53,37 +42,36 @@
 #define EEPROM_SSID_SIZE 32
 #define EEPROM_PASS_ADDR (EEPROM_SSID_ADDR + EEPROM_SSID_SIZE)
 #define EEPROM_PASS_SIZE 64
-#define EEPROM_SIZE (EEPROM_PASS_ADDR + EEPROM_PASS_SIZE)
+#define EEPROM_AP_PASS_ADDR (EEPROM_PASS_ADDR + EEPROM_PASS_SIZE)
+#define EEPROM_AP_PASS_SIZE 16
+#define EEPROM_SIZE (EEPROM_AP_PASS_ADDR + EEPROM_AP_PASS_SIZE)
+
+// Fallback access point password. Define AP_PASSWORD at build time to fix it,
+// for example: PLATFORMIO_BUILD_FLAGS='-DAP_PASSWORD=\"your-password\"' pio run
+// Otherwise each device generates its own (see generatedApPassword()).
+#ifdef AP_PASSWORD
+static_assert(sizeof(AP_PASSWORD) - 1 >= 8 && sizeof(AP_PASSWORD) - 1 <= 63,
+			  "AP_PASSWORD must be 8 to 63 characters (WPA2)");
+#endif
+#define AP_PASS_LEN 12
+// Lowercase letters and digits without the easily confused i, l, o, 0 and 1.
+#define AP_PASS_CHARSET "abcdefghjkmnpqrstuvwxyz23456789"
+static_assert(AP_PASS_LEN < EEPROM_AP_PASS_SIZE, "generated AP password must fit its EEPROM field");
 
 // Function Prototypes
 void connectWifi();
 void setUpUI();
 void textCallback(Control *sender, int type);
 void generalCallback(Control *sender, int type);
-void randomString(char *buf, int len);
-void paramCallback(Control *sender, int type, int param);
 void writeStringToEEPROM(const String &str, int baseaddress, int size);
 
 // UI handles
 uint16_t wifi_ssid_text, wifi_pass_text;
-uint16_t mainLabel, mainSwitcher, mainSlider, mainText, mainNumber, mainScrambleButton, mainTime;
-uint16_t styleButton, styleLabel, styleSwitcher, styleSlider, styleButton2, styleLabel2, styleSlider2;
-uint16_t graph;
-volatile bool updates = false;
-
-#include "rlht.h"
-
-unsigned long currentSliceMillis = 0;
-unsigned long lastSliceMillis = 0;
+uint16_t styleButton2;
 
 // This is the main function which builds our GUI
 void setUpUI()
 {
-
-#ifdef ESP8266
-	{
-		HeapSelectIram doAllocationsInIRAM;
-#endif
 
 		// Turn off verbose debugging
 		ESPUI.setVerbosity(Verbosity::Quiet);
@@ -125,9 +113,9 @@ void setUpUI()
 						 {
 							 if (type == B_UP)
 							 {
-								 Serial.println("Saving credentials to EPROM...");
+								 // Never print the password: serial output ends up in logs.
+								 Serial.print("Saving Wi-Fi credentials to EEPROM for SSID: ");
 								 Serial.println(ESPUI.getControl(wifi_ssid_text)->value);
-								 Serial.println(ESPUI.getControl(wifi_pass_text)->value);
 								 EEPROM.begin(EEPROM_SIZE);
 								 writeStringToEEPROM(ESPUI.getControl(wifi_ssid_text)->value, EEPROM_SSID_ADDR, EEPROM_SSID_SIZE);
 								 writeStringToEEPROM(ESPUI.getControl(wifi_pass_text)->value, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
@@ -154,26 +142,8 @@ void setUpUI()
 		Serial.println(sender->value);
 	}
 
-	// Most elements in this test UI are assigned this generic callback which prints some
-	// basic information. Event types are defined in ESPUI.h
-	// The extended param can be used to pass additional information
-	void paramCallback(Control * sender, int type, int param)
-	{
-		Serial.print("CB: id(");
-		Serial.print(sender->id);
-		Serial.print(") Type(");
-		Serial.print(type);
-		Serial.print(") '");
-		Serial.print(sender->label);
-		Serial.print("' = ");
-		Serial.println(sender->value);
-		Serial.print("param = ");
-		Serial.println(param);
-	}
-
 	void setup()
 	{
-		randomSeed(0);
 		Serial.begin(115200);
 		// Give a serial monitor a moment to attach, but carry on without one.
 		unsigned long serialWaitStart = millis();
@@ -182,13 +152,9 @@ void setUpUI()
 		if (SLOW_BOOT)
 			delay(5000); // Delay booting to give time to connect a serial monitor
 
-		Wire.begin();
-
 		// -------------------------ESPUI------------------------- //
 		connectWifi();
-#if defined(ESP32)
-		WiFi.setSleep(false); // For the ESP32: turn off sleeping to increase UI responsivness (at the cost of power use)
-#endif
+		WiFi.setSleep(false); // Turn off Wi-Fi sleep to keep the UI responsive (at the cost of power use)
 		setUpUI();
 		// -------------------------------------------------------- //
 
@@ -197,48 +163,6 @@ void setUpUI()
 
 	void loop()
 	{
-		// -------------------------RLHT-------------------------- //
-		currentSliceMillis = millis();
-		if (currentSliceMillis - lastSliceMillis > SLICE_DATA_INTERVAL_MS)
-		{
-			lastSliceMillis = currentSliceMillis;
-			// Heating data
-			for (int i = 0; i < NUM_RLHT_SLICES; i++)
-			{
-				float temp;
-				if (relay_heaters[i][1] == 1)
-					RLHTRequestThermo(relay_heaters[i][0], &(relay_heater_val[i]), &(relay_heater_val[i + 1]));
-			}
-			Serial.print("Heater 1: ");
-			Serial.println(relay_heater_val[0]);
-			Serial.print("Heater 2: ");
-			Serial.println(relay_heater_val[1]);
-		}
-		handleSerialCommand();
-
-		// -------------------------------------------------------- //
-
-		// -------------------------ESPUI-------------------------- //
-		static long unsigned lastTime = 0;
-
-		// Send periodic updates if switcher is turned on
-		if (updates && millis() > lastTime + 500)
-		{
-			static uint16_t sliderVal = 10;
-
-			// Flick this switcher on and off
-			ESPUI.updateSwitcher(mainSwitcher, ESPUI.getControl(mainSwitcher)->value.toInt() ? false : true);
-			sliderVal += 10;
-			if (sliderVal > 400)
-				sliderVal = 10;
-
-			// Sliders, numbers, and labels can all be updated at will
-			ESPUI.updateSlider(mainSlider, sliderVal);
-			ESPUI.updateNumber(mainNumber, random(100000));
-			ESPUI.updateLabel(mainLabel, String(sliderVal));
-			lastTime = millis();
-		}
-
 		// Simple debug UART interface
 		if (Serial.available())
 		{
@@ -250,21 +174,11 @@ void setUpUI()
 			case 'W': // Reconnect wifi
 				connectWifi();
 				break;
-			case 'C': // Force a crash (for testing exception decoder)
-#if !defined(ESP32)
-				((void (*)())0xf00fdead)();
-#endif
-				break;
 			default:
 				Serial.print('#');
 				break;
 			}
 		}
-
-#if !defined(ESP32)
-		// We don't need to call this explicitly on ESP32 but we do on 8266
-		MDNS.update();
-#endif
 	}
 	// -------------------------------------------------------- //
 
@@ -296,15 +210,36 @@ void setUpUI()
 		EEPROM.write(baseaddress + len, '\0');
 	}
 
+	// Returns the generated access point password stored in EEPROM, creating
+	// and storing one first if the field does not hold a valid password. Call
+	// it with the radio on: esp_random() is only a true RNG while it is.
+	String generatedApPassword()
+	{
+		EEPROM.begin(EEPROM_SIZE);
+		String stored;
+		readStringFromEEPROM(stored, EEPROM_AP_PASS_ADDR, EEPROM_AP_PASS_SIZE);
+		const char *p = stored.c_str();
+		if (strlen(p) == AP_PASS_LEN && strspn(p, AP_PASS_CHARSET) == AP_PASS_LEN)
+		{
+			EEPROM.end();
+			return String(p);
+		}
+
+		char pass[AP_PASS_LEN + 1];
+		const size_t charset_len = sizeof(AP_PASS_CHARSET) - 1;
+		for (int i = 0; i < AP_PASS_LEN; i++)
+			pass[i] = AP_PASS_CHARSET[esp_random() % charset_len];
+		pass[AP_PASS_LEN] = '\0';
+		writeStringToEEPROM(String(pass), EEPROM_AP_PASS_ADDR, EEPROM_AP_PASS_SIZE);
+		EEPROM.end();
+		return String(pass);
+	}
+
 	void connectWifi()
 	{
 		int connect_timeout;
 
-#if defined(ESP32)
 		WiFi.setHostname(HOSTNAME);
-#else
-	WiFi.hostname(HOSTNAME);
-#endif
 		Serial.println("Begin wifi...");
 
 		// Load credentials from EEPROM
@@ -317,12 +252,8 @@ void setUpUI()
 			readStringFromEEPROM(stored_pass, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
 			EEPROM.end();
 
-// Try to connect with stored credentials, fire up an access point if they don't work.
-#if defined(ESP32)
+			// Try to connect with stored credentials, fire up an access point if they don't work.
 			WiFi.begin(stored_ssid.c_str(), stored_pass.c_str());
-#else
-		WiFi.begin(stored_ssid, stored_pass);
-#endif
 			connect_timeout = 28; // 7 seconds
 			while (WiFi.status() != WL_CONNECTED && connect_timeout > 0)
 			{
@@ -347,7 +278,21 @@ void setUpUI()
 			Serial.println("\nCreating access point...");
 			WiFi.mode(WIFI_AP);
 			WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
-			WiFi.softAP(HOSTNAME);
+#ifdef AP_PASSWORD
+			const String ap_pass = AP_PASSWORD;
+#else
+			const String ap_pass = generatedApPassword();
+#endif
+			if (!WiFi.softAP(HOSTNAME, ap_pass.c_str()))
+				Serial.println("Error starting the access point!");
+			Serial.print("Access point: ");
+			Serial.println(HOSTNAME);
+#ifndef AP_PASSWORD
+			// Only the generated password is printed: it is unique to this device
+			// and serial is the one place its owner can read it.
+			Serial.print("Access point password: ");
+			Serial.println(ap_pass);
+#endif
 
 			connect_timeout = 20;
 			do
@@ -362,11 +307,4 @@ void setUpUI()
 	void textCallback(Control * sender, int type)
 	{
 		// This callback is needed to handle the changed values, even though it doesn't do anything itself.
-	}
-
-	void randomString(char *buf, int len)
-	{
-		for (auto i = 0; i < len - 1; i++)
-			buf[i] = random(0, 26) + 'A';
-		buf[len - 1] = '\0';
 	}

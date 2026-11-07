@@ -1,5 +1,8 @@
 # Third-party notices
 
+Every file in this repository is covered by [`LICENSE`](LICENSE) except
+where a section below says otherwise.
+
 ## ESPUI
 
 `src/main.cpp` started as the ESPUI example
@@ -35,10 +38,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
-## `src/rlht.cpp` and `src/rlht.h`
-
-The origin of these files has not been confirmed. They are an I2C client for a
-relay-heater/thermocouple controller and are unrelated to launch control.
-Until their origin is recorded here, do not assume the repository licence
-covers them.
