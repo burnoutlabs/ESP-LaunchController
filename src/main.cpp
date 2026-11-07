@@ -21,25 +21,8 @@
 #include <EEPROM.h>
 #include <ESPUI.h>
 
-#if defined(ESP32)
 #include <WiFi.h>
 #include <ESPmDNS.h>
-#else
-// esp8266
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <umm_malloc/umm_heap_select.h>
-#ifndef CORE_MOCK
-#ifndef MMU_IRAM_HEAP
-#warning Try MMU option '2nd heap shared' in 'tools' IDE menu (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#option-summary)
-#warning use decorators: { HeapSelectIram doAllocationsInIRAM; ESPUI.addControl(...) ... } (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#how-to-select-heap)
-#warning then check http://<ip>/heap
-#endif // MMU_IRAM_HEAP
-#ifndef DEBUG_ESP_OOM
-#error on ESP8266 and ESPUI, you must define OOM debug option when developping
-#endif
-#endif
-#endif
 
 // Settings
 #define SLOW_BOOT 0
@@ -60,25 +43,15 @@ void connectWifi();
 void setUpUI();
 void textCallback(Control *sender, int type);
 void generalCallback(Control *sender, int type);
-void randomString(char *buf, int len);
-void paramCallback(Control *sender, int type, int param);
 void writeStringToEEPROM(const String &str, int baseaddress, int size);
 
 // UI handles
 uint16_t wifi_ssid_text, wifi_pass_text;
-uint16_t mainLabel, mainSwitcher, mainSlider, mainText, mainNumber, mainScrambleButton, mainTime;
-uint16_t styleButton, styleLabel, styleSwitcher, styleSlider, styleButton2, styleLabel2, styleSlider2;
-uint16_t graph;
-volatile bool updates = false;
+uint16_t styleButton2;
 
 // This is the main function which builds our GUI
 void setUpUI()
 {
-
-#ifdef ESP8266
-	{
-		HeapSelectIram doAllocationsInIRAM;
-#endif
 
 		// Turn off verbose debugging
 		ESPUI.setVerbosity(Verbosity::Quiet);
@@ -149,26 +122,8 @@ void setUpUI()
 		Serial.println(sender->value);
 	}
 
-	// Most elements in this test UI are assigned this generic callback which prints some
-	// basic information. Event types are defined in ESPUI.h
-	// The extended param can be used to pass additional information
-	void paramCallback(Control * sender, int type, int param)
-	{
-		Serial.print("CB: id(");
-		Serial.print(sender->id);
-		Serial.print(") Type(");
-		Serial.print(type);
-		Serial.print(") '");
-		Serial.print(sender->label);
-		Serial.print("' = ");
-		Serial.println(sender->value);
-		Serial.print("param = ");
-		Serial.println(param);
-	}
-
 	void setup()
 	{
-		randomSeed(0);
 		Serial.begin(115200);
 		// Give a serial monitor a moment to attach, but carry on without one.
 		unsigned long serialWaitStart = millis();
@@ -179,9 +134,7 @@ void setUpUI()
 
 		// -------------------------ESPUI------------------------- //
 		connectWifi();
-#if defined(ESP32)
-		WiFi.setSleep(false); // For the ESP32: turn off sleeping to increase UI responsivness (at the cost of power use)
-#endif
+		WiFi.setSleep(false); // Turn off Wi-Fi sleep to keep the UI responsive (at the cost of power use)
 		setUpUI();
 		// -------------------------------------------------------- //
 
@@ -190,27 +143,6 @@ void setUpUI()
 
 	void loop()
 	{
-		// -------------------------ESPUI-------------------------- //
-		static long unsigned lastTime = 0;
-
-		// Send periodic updates if switcher is turned on
-		if (updates && millis() > lastTime + 500)
-		{
-			static uint16_t sliderVal = 10;
-
-			// Flick this switcher on and off
-			ESPUI.updateSwitcher(mainSwitcher, ESPUI.getControl(mainSwitcher)->value.toInt() ? false : true);
-			sliderVal += 10;
-			if (sliderVal > 400)
-				sliderVal = 10;
-
-			// Sliders, numbers, and labels can all be updated at will
-			ESPUI.updateSlider(mainSlider, sliderVal);
-			ESPUI.updateNumber(mainNumber, random(100000));
-			ESPUI.updateLabel(mainLabel, String(sliderVal));
-			lastTime = millis();
-		}
-
 		// Simple debug UART interface
 		if (Serial.available())
 		{
@@ -222,21 +154,11 @@ void setUpUI()
 			case 'W': // Reconnect wifi
 				connectWifi();
 				break;
-			case 'C': // Force a crash (for testing exception decoder)
-#if !defined(ESP32)
-				((void (*)())0xf00fdead)();
-#endif
-				break;
 			default:
 				Serial.print('#');
 				break;
 			}
 		}
-
-#if !defined(ESP32)
-		// We don't need to call this explicitly on ESP32 but we do on 8266
-		MDNS.update();
-#endif
 	}
 	// -------------------------------------------------------- //
 
@@ -272,11 +194,7 @@ void setUpUI()
 	{
 		int connect_timeout;
 
-#if defined(ESP32)
 		WiFi.setHostname(HOSTNAME);
-#else
-	WiFi.hostname(HOSTNAME);
-#endif
 		Serial.println("Begin wifi...");
 
 		// Load credentials from EEPROM
@@ -289,12 +207,8 @@ void setUpUI()
 			readStringFromEEPROM(stored_pass, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
 			EEPROM.end();
 
-// Try to connect with stored credentials, fire up an access point if they don't work.
-#if defined(ESP32)
+			// Try to connect with stored credentials, fire up an access point if they don't work.
 			WiFi.begin(stored_ssid.c_str(), stored_pass.c_str());
-#else
-		WiFi.begin(stored_ssid, stored_pass);
-#endif
 			connect_timeout = 28; // 7 seconds
 			while (WiFi.status() != WL_CONNECTED && connect_timeout > 0)
 			{
@@ -334,11 +248,4 @@ void setUpUI()
 	void textCallback(Control * sender, int type)
 	{
 		// This callback is needed to handle the changed values, even though it doesn't do anything itself.
-	}
-
-	void randomString(char *buf, int len)
-	{
-		for (auto i = 0; i < len - 1; i++)
-			buf[i] = random(0, 26) + 'A';
-		buf[len - 1] = '\0';
 	}
