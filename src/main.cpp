@@ -15,6 +15,11 @@
  * Point wifi with the SSID HOSTNAME (defined below). You can then connect and use
  * the controls on the "Wifi Credentials" tab to store credentials into the EEPROM.
  *
+ * The access point is WPA2-protected. Its password is AP_PASSWORD if that is
+ * defined at build time; otherwise the device generates a random one on first
+ * use, keeps it at EEPROM addresses 96-111, and prints it to serial whenever it
+ * starts the access point. See README.md.
+ *
  */
 
 #include <Arduino.h>
@@ -23,6 +28,7 @@
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <esp_random.h>
 
 // Settings
 #define SLOW_BOOT 0
@@ -36,7 +42,21 @@
 #define EEPROM_SSID_SIZE 32
 #define EEPROM_PASS_ADDR (EEPROM_SSID_ADDR + EEPROM_SSID_SIZE)
 #define EEPROM_PASS_SIZE 64
-#define EEPROM_SIZE (EEPROM_PASS_ADDR + EEPROM_PASS_SIZE)
+#define EEPROM_AP_PASS_ADDR (EEPROM_PASS_ADDR + EEPROM_PASS_SIZE)
+#define EEPROM_AP_PASS_SIZE 16
+#define EEPROM_SIZE (EEPROM_AP_PASS_ADDR + EEPROM_AP_PASS_SIZE)
+
+// Fallback access point password. Define AP_PASSWORD at build time to fix it,
+// for example: PLATFORMIO_BUILD_FLAGS='-DAP_PASSWORD=\"your-password\"' pio run
+// Otherwise each device generates its own (see generatedApPassword()).
+#ifdef AP_PASSWORD
+static_assert(sizeof(AP_PASSWORD) - 1 >= 8 && sizeof(AP_PASSWORD) - 1 <= 63,
+			  "AP_PASSWORD must be 8 to 63 characters (WPA2)");
+#endif
+#define AP_PASS_LEN 12
+// Lowercase letters and digits without the easily confused i, l, o, 0 and 1.
+#define AP_PASS_CHARSET "abcdefghjkmnpqrstuvwxyz23456789"
+static_assert(AP_PASS_LEN < EEPROM_AP_PASS_SIZE, "generated AP password must fit its EEPROM field");
 
 // Function Prototypes
 void connectWifi();
@@ -190,6 +210,31 @@ void setUpUI()
 		EEPROM.write(baseaddress + len, '\0');
 	}
 
+	// Returns the generated access point password stored in EEPROM, creating
+	// and storing one first if the field does not hold a valid password. Call
+	// it with the radio on: esp_random() is only a true RNG while it is.
+	String generatedApPassword()
+	{
+		EEPROM.begin(EEPROM_SIZE);
+		String stored;
+		readStringFromEEPROM(stored, EEPROM_AP_PASS_ADDR, EEPROM_AP_PASS_SIZE);
+		const char *p = stored.c_str();
+		if (strlen(p) == AP_PASS_LEN && strspn(p, AP_PASS_CHARSET) == AP_PASS_LEN)
+		{
+			EEPROM.end();
+			return String(p);
+		}
+
+		char pass[AP_PASS_LEN + 1];
+		const size_t charset_len = sizeof(AP_PASS_CHARSET) - 1;
+		for (int i = 0; i < AP_PASS_LEN; i++)
+			pass[i] = AP_PASS_CHARSET[esp_random() % charset_len];
+		pass[AP_PASS_LEN] = '\0';
+		writeStringToEEPROM(String(pass), EEPROM_AP_PASS_ADDR, EEPROM_AP_PASS_SIZE);
+		EEPROM.end();
+		return String(pass);
+	}
+
 	void connectWifi()
 	{
 		int connect_timeout;
@@ -233,7 +278,21 @@ void setUpUI()
 			Serial.println("\nCreating access point...");
 			WiFi.mode(WIFI_AP);
 			WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
-			WiFi.softAP(HOSTNAME);
+#ifdef AP_PASSWORD
+			const String ap_pass = AP_PASSWORD;
+#else
+			const String ap_pass = generatedApPassword();
+#endif
+			if (!WiFi.softAP(HOSTNAME, ap_pass.c_str()))
+				Serial.println("Error starting the access point!");
+			Serial.print("Access point: ");
+			Serial.println(HOSTNAME);
+#ifndef AP_PASSWORD
+			// Only the generated password is printed: it is unique to this device
+			// and serial is the one place its owner can read it.
+			Serial.print("Access point password: ");
+			Serial.println(ap_pass);
+#endif
 
 			connect_timeout = 20;
 			do
