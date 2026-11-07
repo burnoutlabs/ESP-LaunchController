@@ -71,11 +71,6 @@ uint16_t styleButton, styleLabel, styleSwitcher, styleSlider, styleButton2, styl
 uint16_t graph;
 volatile bool updates = false;
 
-#include "rlht.h"
-
-unsigned long currentSliceMillis = 0;
-unsigned long lastSliceMillis = 0;
-
 // This is the main function which builds our GUI
 void setUpUI()
 {
@@ -182,8 +177,6 @@ void setUpUI()
 		if (SLOW_BOOT)
 			delay(5000); // Delay booting to give time to connect a serial monitor
 
-		Wire.begin();
-
 		// -------------------------ESPUI------------------------- //
 		connectWifi();
 #if defined(ESP32)
@@ -197,27 +190,6 @@ void setUpUI()
 
 	void loop()
 	{
-		// -------------------------RLHT-------------------------- //
-		currentSliceMillis = millis();
-		if (currentSliceMillis - lastSliceMillis > SLICE_DATA_INTERVAL_MS)
-		{
-			lastSliceMillis = currentSliceMillis;
-			// Heating data
-			for (int i = 0; i < NUM_RLHT_SLICES; i++)
-			{
-				float temp;
-				if (relay_heaters[i][1] == 1)
-					RLHTRequestThermo(relay_heaters[i][0], &(relay_heater_val[i]), &(relay_heater_val[i + 1]));
-			}
-			Serial.print("Heater 1: ");
-			Serial.println(relay_heater_val[0]);
-			Serial.print("Heater 2: ");
-			Serial.println(relay_heater_val[1]);
-		}
-		handleSerialCommand();
-
-		// -------------------------------------------------------- //
-
 		// -------------------------ESPUI-------------------------- //
 		static long unsigned lastTime = 0;
 
