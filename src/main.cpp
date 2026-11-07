@@ -93,9 +93,9 @@ void setUpUI()
 						 {
 							 if (type == B_UP)
 							 {
-								 Serial.println("Saving credentials to EPROM...");
+								 // Never print the password: serial output ends up in logs.
+								 Serial.print("Saving Wi-Fi credentials to EEPROM for SSID: ");
 								 Serial.println(ESPUI.getControl(wifi_ssid_text)->value);
-								 Serial.println(ESPUI.getControl(wifi_pass_text)->value);
 								 EEPROM.begin(EEPROM_SIZE);
 								 writeStringToEEPROM(ESPUI.getControl(wifi_ssid_text)->value, EEPROM_SSID_ADDR, EEPROM_SSID_SIZE);
 								 writeStringToEEPROM(ESPUI.getControl(wifi_pass_text)->value, EEPROM_PASS_ADDR, EEPROM_PASS_SIZE);
